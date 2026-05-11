@@ -40,6 +40,13 @@
 #define PIN_NEOPIXEL    48   // onboard WS2812B RGB LED
 #define NEOPIXEL_COUNT   1
 
+// ── Status LEDs (onboard TX / RX indicator LEDs) ──────────────────────────────
+#define PIN_LED_TX      43   // TX indicator LED — GPIO43 / UART0 TX
+#define PIN_LED_RX      44   // RX indicator LED — GPIO44 / UART0 RX
+// statusLedInit() reconfigures these pins as GPIO outputs, which disconnects
+// UART0 and silences Serial.print(). Boot messages still appear before setup()
+// calls statusLedInit(). Comment out that call to restore serial debugging.
+
 // ── Carousel Slot Layout ──────────────────────────────────────────────────────
 // Physical order matches day-of-week (Monday first):
 //   0=Monday  1=Tuesday  2=Wednesday  3=Thursday
