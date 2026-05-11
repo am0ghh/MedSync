@@ -8,8 +8,8 @@ MedSync is a smart pill dispenser built around the Freenove ESP32-S3-WROOM. It a
 
 - **Automated daily dispensing** — rotates a 3D-printed 8-slot carousel to the correct day's compartment at a scheduled time (default 9:00 AM)
 - **BLE wireless control** — iOS app connects over Bluetooth to dispense, navigate slots, enter/exit loading mode, and calibrate the carousel home position
-- **Camera verification** — captures a JPEG photo of the collection cup immediately after dispensing and uploads it to Supabase Storage
-- **Computer vision pill detection** — Python backend analyses each photo using OpenCV to determine whether pills were actually taken
+- **On-device computer vision** — immediately after dispensing, the camera captures an RGB565 frame and runs a colour saturation algorithm directly on the ESP32 to detect whether pills are present in the cup. No external server or internet connection required for pill detection.
+- **Optional Python CV backend** — a more accurate OpenCV-based detector (`scripts/cv_processor.py`) can run on any internet-connected machine as an alternative or supplement to on-device detection
 - **Push notifications** — daily dose reminder at the scheduled time; missed dose alert fires when BLE status transitions to missed; refill alert fires when all 7 day slots have been used
 - **Caregiver dashboard** — optional tab in the iOS app showing weekly adherence summary, 7-day status grid, missed doses, and refill status
 - **Loading mode** — rotates the blocked slot over the dispensing hole so the caregiver can safely refill compartments
@@ -180,6 +180,37 @@ MedSync/
 +-- platformio.ini
 +-- medsync.kicad_sch         # KiCad schematic
 ```
+
+---
+
+## Computer Vision
+
+### On-Device Detection (default)
+
+Pill detection runs directly on the ESP32-S3 with no external dependency. After each dispense the camera captures a 320x240 RGB565 frame into PSRAM and the firmware iterates every pixel:
+
+1. Converts RGB565 to 8-bit R, G, B channels
+2. Skips pixels that are too dark (shadows) or near-white (the cup interior)
+3. Computes a saturation value for the remaining pixels
+4. If more than 1.5% of the frame contains saturated, coloured pixels — pills are present
+
+The result (`pills_detected: true/false`) is written directly to Supabase without any intermediate server. The device works fully standalone: no laptop, no cloud function, no Python runtime needed.
+
+Limitations: works well for coloured pills against a white or light-grey cup. All-white pills may not be detected reliably by the on-device path.
+
+### Optional Python Backend (higher accuracy)
+
+`scripts/cv_processor.py` uses OpenCV with colour segmentation, morphological filtering, and a HoughCircles fallback for white pills. It is more accurate than the on-device path but requires a host.
+
+**Hosting options:**
+
+| Option | Setup | Cost |
+|---|---|---|
+| Local laptop | `python cv_processor.py` in a terminal | Free, laptop must stay on |
+| Railway | Push `scripts/` folder, set env vars, deploy as background worker | Free tier available |
+| Render | Same as Railway — connect repo, set build command to `pip install -r requirements.txt`, start command to `python cv_processor.py` | Free tier available |
+
+To use the Python backend, set `SUPABASE_URL` and `SUPABASE_KEY` in `scripts/.env` and run the script. It polls Supabase every 15 seconds for new unanalysed events and overwrites the on-device result if needed.
 
 ---
 

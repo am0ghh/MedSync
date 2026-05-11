@@ -585,11 +585,10 @@ static bool cameraInit() {
   cfg.pin_pwdn     = CAM_PIN_PWDN;
   cfg.pin_reset    = CAM_PIN_RESET;
   cfg.xclk_freq_hz = 20000000;
-  cfg.pixel_format = PIXFORMAT_JPEG;
-  cfg.frame_size   = FRAMESIZE_QVGA;
-  cfg.jpeg_quality = 12;
+  cfg.pixel_format = PIXFORMAT_RGB565;  // raw pixels for on-device CV
+  cfg.frame_size   = FRAMESIZE_QVGA;   // 320x240 = 150KB, needs PSRAM
   cfg.fb_count     = 1;
-  cfg.fb_location  = CAMERA_FB_IN_DRAM;
+  cfg.fb_location  = CAMERA_FB_IN_PSRAM;
   cfg.grab_mode    = CAMERA_GRAB_WHEN_EMPTY;
 
   Serial.println("[camera] initialising...");
@@ -609,19 +608,50 @@ static bool cameraInit() {
   return true;
 }
 
-static String cameraCaptureAndUpload(const String& filename) {
+// On-device pill detection using raw RGB565 frames.
+// Iterates every pixel, converts to approximate saturation, and counts pixels
+// that are neither white (cup interior) nor dark (shadows/background).
+// A ratio above 1.5% of the frame being coloured indicates pills are present.
+static bool detectPillsOnDevice(camera_fb_t* fb) {
+  if (!fb || fb->format != PIXFORMAT_RGB565) return false;
+
+  uint32_t colored = 0;
+  uint32_t total   = (uint32_t)fb->width * fb->height;
+  const uint8_t* p = fb->buf;
+
+  for (uint32_t i = 0; i < total; i++, p += 2) {
+    // OV2640 RGB565 byte order: high byte first
+    uint16_t px = ((uint16_t)p[0] << 8) | p[1];
+    uint8_t r = ((px >> 11) & 0x1F) << 3;
+    uint8_t g = ((px >>  5) & 0x3F) << 2;
+    uint8_t b = ( px        & 0x1F) << 3;
+
+    uint8_t maxc = max(r, max(g, b));
+    uint8_t minc = min(r, min(g, b));
+
+    if (maxc < 40)  continue;   // too dark — shadow or background
+    if (minc > 180) continue;   // near-white — cup interior
+    uint8_t sat = (uint8_t)(((uint32_t)(maxc - minc) * 255) / maxc);
+    if (sat > 50) colored++;
+  }
+
+  float ratio = (float)colored / (float)total;
+  Serial.printf("[cv] coloured ratio: %.4f (%u/%u px)\n", ratio, colored, total);
+  return ratio > 0.015f;
+}
+
+static bool cameraCaptureAndDetect() {
   camera_fb_t* fb = esp_camera_fb_get();
   if (!fb) {
     Serial.println("[camera] frame capture failed");
-    return "";
+    return false;
   }
-
-  Serial.printf("[camera] captured %u bytes, uploading as %s\n",
-                fb->len, filename.c_str());
-
-  String url = supabaseUploadImage(fb->buf, fb->len, filename);
+  Serial.printf("[camera] captured %ux%u RGB565 frame (%u bytes)\n",
+                fb->width, fb->height, fb->len);
+  bool result = detectPillsOnDevice(fb);
   esp_camera_fb_return(fb);
-  return url;
+  Serial.printf("[cv] result: %s\n", result ? "PILLS DETECTED" : "CUP EMPTY");
+  return result;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -674,32 +704,27 @@ static void doDispense() {
   displayMessage("Dispensing...", DAY_LABELS[daySlot]);
   stepperMoveTo(daySlot);
 
-  delay(300);  // let pills settle before capture
+  delay(500);  // let pills settle before capture
 
-  char filename[40];
+  bool pillsPresent = cameraCaptureAndDetect();
   time_t now = schedulerNow();
-  struct tm ti;
-  localtime_r(&now, &ti);
-  snprintf(filename, sizeof(filename), "medsync_%04d%02d%02d_%02d%02d%02d.jpg",
-           ti.tm_year + 1900, ti.tm_mon + 1, ti.tm_mday,
-           ti.tm_hour, ti.tm_min, ti.tm_sec);
 
-  String photoUrl = cameraCaptureAndUpload(String(filename));
+  char dayName[16];
+  strncpy(dayName, DAY_LABELS[daySlot], sizeof(dayName));
 
   if (currentEventId.length() == 0) {
-    char dayName[16];
-    strncpy(dayName, DAY_LABELS[daySlot], sizeof(dayName));
     currentEventId = supabaseInsertDoseEvent(dayName, now, "dispensed");
   }
   if (currentEventId.length() > 0) {
-    supabaseUpdateDoseEvent(currentEventId, "dispensed", photoUrl.c_str(), -1);
+    supabaseUpdateDoseEvent(currentEventId, "dispensed", "", pillsPresent ? 1 : 0);
   }
 
   dispenseTime  = now;
   doseDoneToday = true;
   state         = STATE_POST_DISPENSE;
 
-  Serial.printf("[main] dispensed — photo: %s\n", photoUrl.c_str());
+  Serial.printf("[main] dispensed — on-device CV: %s\n",
+                pillsPresent ? "pills detected" : "cup empty");
 }
 
 static void doMissed() {
