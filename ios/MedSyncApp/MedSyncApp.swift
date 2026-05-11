@@ -18,6 +18,8 @@ struct MedSyncApp: App {
             }
             .animation(.easeOut(duration: 0.5), value: showLaunch)
             .task {
+                NotificationManager.shared.requestPermission()
+                NotificationManager.shared.scheduleDoseReminder()
                 try? await Task.sleep(nanoseconds: 2_200_000_000)
                 showLaunch = false
             }

@@ -148,6 +148,13 @@ extension BluetoothManager: CBPeripheralDelegate {
         guard characteristic.uuid == statusCharUUID,
               let data = characteristic.value,
               let json = String(data: data, encoding: .utf8) else { return }
-        DispatchQueue.main.async { self.deviceStatus = json }
+        DispatchQueue.main.async {
+            let previous = self.deviceStatus
+            self.deviceStatus = json
+            // Fire missed-dose notification once when status transitions to "missed".
+            if previous?.contains("\"missed\"") == false && json.contains("\"missed\"") {
+                Task { await NotificationManager.shared.sendMissedDoseNotification() }
+            }
+        }
     }
 }

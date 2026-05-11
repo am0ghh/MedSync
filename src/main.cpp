@@ -104,7 +104,8 @@ static void displayHome(int daySlot, const char* timeStr, DoseStatus status) {
   u8g2.clearBuffer();
 
   u8g2.setFont(u8g2_font_4x6_tr);
-  const char* hdr = "[ MEDSYNC ]";
+  char hdr[16];
+  snprintf(hdr, sizeof(hdr), "NEXT: %02d:%02d", DOSE_HOUR, DOSE_MINUTE);
   u8g2.drawStr((128 - u8g2.getStrWidth(hdr)) / 2, 7, hdr);
   u8g2.drawHLine(0, 9, 128);
 
